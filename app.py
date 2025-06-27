@@ -1,4 +1,4 @@
-# app.py (Quart 終極版 - 完整程式碼)
+# app.py (最終適應版 - 完整程式碼)
 
 import os
 import asyncio
@@ -9,18 +9,13 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from playwright.async_api import async_playwright, TimeoutError
 
-# ==========================================================================================
-# 爬蟲核心邏輯
-# ==========================================================================================
-
+# --- 爬蟲核心函式 (保持不變) ---
 async def get_threads_main_post(main_content_area):
-    """在指定的沙盒區域內抓取主文"""
     print("\n--- 正在沙盒內抓取主文 ---")
     post_container_selector = 'div[data-pressable-container="true"]'
     main_post_container = main_content_area.locator(post_container_selector).first
     await main_post_container.wait_for(state='visible', timeout=5000)
     print("✅ 成功鎖定主文容器！")
-
     try:
         more_button = main_post_container.get_by_role("button", name="more", exact=False)
         await more_button.click(timeout=2000)
@@ -28,97 +23,78 @@ async def get_threads_main_post(main_content_area):
         await asyncio.sleep(1)
     except TimeoutError:
         print("主文為短篇，無需展開。")
-
     all_texts = await main_post_container.locator('span[dir="auto"]').all_inner_texts()
-    
     TIMESTAMP_REGEX = re.compile(r'^\d+\s*(?:秒|分鐘|小時|天|週|[smhdw])$', re.IGNORECASE)
     potential_content = []
     for text in all_texts:
         fragment = text.strip().removesuffix("翻譯").strip()
         if fragment and not fragment.isdigit() and not TIMESTAMP_REGEX.match(fragment):
             potential_content.append(fragment)
-    
-    # 移除作者名
     return "\n".join(potential_content[1:]) if len(potential_content) > 1 else "\n".join(potential_content)
 
-
 async def get_threads_comments(page, main_content_area):
-    """在指定的沙盒區域內抓取留言"""
     print("\n--- 正在沙盒內抓取留言 ---")
-    
     scroll_count = 3
-    print(f"將模擬向下捲動 {scroll_count} 次以載入留言...")
     for i in range(scroll_count):
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await asyncio.sleep(2)
-
     post_container_selector = 'div[data-pressable-container="true"]'
     all_containers_in_sandbox = main_content_area.locator(post_container_selector)
-    
     container_count = await all_containers_in_sandbox.count()
-    print(f"✅ 在沙盒內共鎖定 {container_count} 個容器（包含主文）。")
-
-    if container_count <= 1:
-        return []
-
+    if container_count <= 1: return []
     comment_containers = await all_containers_in_sandbox.all()
     comments = []
-    
-    print(f"正在分析 {len(comment_containers) - 1} 則留言...")
     for i, container in enumerate(comment_containers[1:]):
         try:
             all_texts = await container.locator('span[dir="auto"]').all_inner_texts()
-            
             TIMESTAMP_REGEX = re.compile(r'^\d+\s*(?:秒|分鐘|小時|天|週|[smhdw])$', re.IGNORECASE)
             cleaned_fragments = []
             for text in all_texts:
                 fragment = text.strip().removesuffix("翻譯").strip()
                 if fragment and not fragment.isdigit() and not TIMESTAMP_REGEX.match(fragment):
                     cleaned_fragments.append(fragment)
-
             if len(cleaned_fragments) > 1:
-                author = cleaned_fragments[0]
-                text = "\n".join(cleaned_fragments[1:])
-                comments.append({"author": author, "text": text})
-        except Exception:
-            continue
-            
+                author, text_content = cleaned_fragments[0], "\n".join(cleaned_fragments[1:])
+                comments.append({"author": author, "text": text_content})
+        except Exception: continue
     return comments
 
-
+# --- 主爬蟲協調函式進行終極升級 ---
 async def get_full_threads_content_sandboxed(url: str):
-    """主爬蟲協調函式"""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
         page = await browser.new_page()
         try:
             await page.goto(url, wait_until='networkidle')
-            
-            main_content_area = page.locator('div[role="main"]').first
-            await main_content_area.wait_for(state='attached', timeout=7000)
-
+            main_content_area = None
+            try:
+                print("--- 正在嘗試方案A：鎖定精準沙盒 (role=main) ---")
+                main_content_area = page.locator('div[role="main"]').first
+                await main_content_area.wait_for(state='attached', timeout=15000)
+                print("✅ 方案A成功！精準沙盒已鎖定。")
+            except TimeoutError:
+                print("⚠️ 方案A失敗。正在啟動方案B：鎖定通用沙盒 (body) ---")
+                main_content_area = page.locator('body').first
+                await main_content_area.wait_for(state='attached', timeout=5000)
+                print("✅ 方案B成功！通用沙盒已鎖定。")
             main_post = await get_threads_main_post(main_content_area)
             comments = await get_threads_comments(page, main_content_area)
-            
             return {"main_post": main_post, "comments": comments}
+        except TimeoutError as e:
+            print("\n❌ 錯誤：所有沙盒定位方案均超時失敗。")
+            print("正在啟用黑盒子模式，記錄失敗前的最後狀態...")
+            html_content = await page.content()
+            print(f"  --- 頁面 HTML (前 1000 字元) ---\n{html_content[:1000]}\n  --- HTML 結束 ---")
+            raise e
         finally:
             await browser.close()
 
-
-# ==========================================================================================
-# Quart Web 應用 & LINE Bot 邏輯
-# ==========================================================================================
-
+# --- Quart Web 應用 & LINE Bot 邏輯 (保持不變) ---
 app = Quart(__name__)
-
-# 從環境變數讀取您的 LINE Bot 鑰匙
 CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = os.environ.get("CHANNEL_SECRET")
-
-# 驗證金鑰是否存在 (在 Render 環境中必須存在)
 if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET:
-    raise ValueError("環境變數 CHANNEL_ACCESS_TOKEN 和 CHANNEL_SECRET 未設定！")
-
+    raise ValueError("環境變數未設定！")
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
@@ -126,30 +102,19 @@ handler = WebhookHandler(CHANNEL_SECRET)
 async def callback():
     signature = request.headers['X-Line-Signature']
     body = await request.get_data(as_text=True)
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
+    try: handler.handle(body, signature)
+    except InvalidSignatureError: abort(400)
     return 'OK'
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_message = event.message.text
-    print(f"收到用戶訊息: {user_message}")
-
-    # --- 終極修正：使用更通用的判斷條件 ---
-    if "threads." in user_message: # 這樣就能同時匹配 threads.net 和 threads.com
-        print("偵測到 Threads 網址，正在建立背景任務...")
+    if "threads." in user_message:
         asyncio.create_task(process_threads_url(event, user_message))
     else:
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="這看起來不是一個有效的 Threads 網址，請重新貼上。")
-        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請貼上一個有效的 Threads 網址。"))
 
-# 執行爬蟲並回傳結果的非同步函式 (保持不變)
 async def process_threads_url(event, url):
-    # ... (此函式內容與上一版完全一樣，此處省略以保持簡潔) ...
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text="收到網址，正在啟動擷取引擎...請稍候約30-60秒。"))
     try:
         result = await get_full_threads_content_sandboxed(url)
