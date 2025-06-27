@@ -112,81 +112,61 @@ async def get_full_threads_content_sandboxed(url: str):
 app = Quart(__name__)
 
 # 從環境變數讀取您的 LINE Bot 鑰匙
-# 為了方便本地測試，如果找不到環境變數，就使用您直接貼上的值
-CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN", "")
-CHANNEL_SECRET = os.environ.get("CHANNEL_SECRET", "")
+CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")
+CHANNEL_SECRET = os.environ.get("CHANNEL_SECRET")
 
-# 驗證金鑰是否已填寫
-if "請在這裡貼上" in CHANNEL_ACCESS_TOKEN or "請在這裡貼上" in CHANNEL_SECRET:
-    raise ValueError("錯誤：請先在 app.py 檔案中填寫您的 Channel Access Token 和 Channel Secret！")
+# 驗證金鑰是否存在 (在 Render 環境中必須存在)
+if not CHANNEL_ACCESS_TOKEN or not CHANNEL_SECRET:
+    raise ValueError("環境變數 CHANNEL_ACCESS_TOKEN 和 CHANNEL_SECRET 未設定！")
 
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
-# 接收 LINE 平台請求的進入點
 @app.route("/callback", methods=['POST'])
 async def callback():
     signature = request.headers['X-Line-Signature']
     body = await request.get_data(as_text=True)
-    
-    print(f"Request body: {body}")
-    print(f"Signature: {signature}")
-
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
-        print("簽名驗證失敗！請立即檢查您的 Channel Secret。")
         abort(400)
-    except Exception as e:
-        print(f"處理請求時發生錯誤: {e}")
-        abort(500)
     return 'OK'
 
-# 處理收到的文字訊息
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_message = event.message.text
     print(f"收到用戶訊息: {user_message}")
 
-    if "threads.net" in user_message:
+    # --- 終極修正：使用更通用的判斷條件 ---
+    if "threads." in user_message: # 這樣就能同時匹配 threads.net 和 threads.com
         print("偵測到 Threads 網址，正在建立背景任務...")
         asyncio.create_task(process_threads_url(event, user_message))
     else:
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="這看起來不是一個有效的 Threads.net 網址，請重新貼上。")
+            TextSendMessage(text="這看起來不是一個有效的 Threads 網址，請重新貼上。")
         )
 
-# 執行爬蟲並回傳結果的非同步函式
+# 執行爬蟲並回傳結果的非同步函式 (保持不變)
 async def process_threads_url(event, url):
-    # 先發送一個「處理中」的訊息，優化使用者體驗
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text="收到網址，正在啟動擷取引擎...請稍候約30-60秒。")
-    )
-    
+    # ... (此函式內容與上一版完全一樣，此處省略以保持簡潔) ...
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text="收到網址，正在啟動擷取引擎...請稍候約30-60秒。"))
     try:
         result = await get_full_threads_content_sandboxed(url)
-        
         if result:
             reply_text = f"✅ 主文內容：\n---------------------\n{result['main_post']}"
-            
             if result["comments"]:
                 reply_text += f"\n\n✅ 留言列表 ({len(result['comments'])} 則)：\n---------------------"
                 for i, comment in enumerate(result["comments"]):
                     reply_text += f"\n\n--- 留言 {i+1} | {comment['author']} ---\n{comment['text']}"
-            
             if len(reply_text) > 4900:
                 reply_text = reply_text[:4900] + "\n\n...(內容過長，已被截斷)"
-
             line_bot_api.push_message(event.source.user_id, TextSendMessage(text=reply_text))
         else:
             line_bot_api.push_message(event.source.user_id, TextSendMessage(text="抓取失敗，可能是無效網址、私密貼文或頁面結構無法識別。"))
-
     except Exception as e:
          print(f"爬蟲任務執行失敗: {e}")
          line_bot_api.push_message(event.source.user_id, TextSendMessage(text=f"處理過程中發生嚴重錯誤，請聯繫管理員。錯誤詳情: {e}"))
 
-# 應用程式的啟動點
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
