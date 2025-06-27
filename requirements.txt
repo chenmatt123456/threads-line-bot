@@ -1,0 +1,6 @@
+quart
+line-bot-sdk
+playwright
+beautifulsoup4
+gunicorn
+asyncio
