@@ -16,5 +16,5 @@ COPY . .
 # 設定環境變數，告訴 Gunicorn 在哪個門牌上監聽
 ENV PORT 8080
 
-# 最終的啟動指令
-CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:${PORT}", "app:app"]
+# 最終的啟動指令 (使用 shell 格式)
+CMD gunicorn -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT} app:app
