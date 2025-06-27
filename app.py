@@ -1,4 +1,4 @@
-# app.py (Firefox 引擎版 - 完整程式碼)
+# app.py (核心穩定版 - 只抓取主文)
 
 import os
 import asyncio
@@ -9,7 +9,9 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from playwright.async_api import async_playwright, TimeoutError
 
+# --- 爬蟲核心邏輯 (只保留抓取主文的部分) ---
 async def get_threads_main_post(main_content_area):
+    """在指定的沙盒區域內，完美地抓取主文"""
     print("\n--- 正在沙盒內抓取主文 ---")
     post_container_selector = 'div[data-pressable-container="true"]'
     main_post_container = main_content_area.locator(post_container_selector).first
@@ -20,41 +22,26 @@ async def get_threads_main_post(main_content_area):
         await more_button.click(timeout=3000)
         await asyncio.sleep(1)
     except TimeoutError:
-        pass
+        print("主文為短篇，無需展開。")
+    
     all_texts = await main_post_container.locator('span[dir="auto"]').all_inner_texts()
+    
     TIMESTAMP_REGEX = re.compile(r'^\d+\s*(?:秒|分鐘|小時|天|週|[smhdw])$', re.IGNORECASE)
     potential_content = [frag.strip().removesuffix("翻譯").strip() for frag in all_texts if frag.strip() and not frag.strip().isdigit() and not TIMESTAMP_REGEX.match(frag.strip())]
+    
+    # 移除作者名，返回純淨的主文
     return "\n".join(potential_content[1:]) if len(potential_content) > 1 else "\n".join(potential_content)
 
-async def get_threads_comments(page, main_content_area):
-    print("\n--- 正在抓取留言 ---")
-    scroll_count = 2
-    for i in range(scroll_count):
-        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-        await asyncio.sleep(2)
-    post_container_selector = 'div[data-pressable-container="true"]'
-    all_containers_in_sandbox = main_content_area.locator(post_container_selector)
-    container_count = await all_containers_in_sandbox.count()
-    if container_count <= 1: return []
-    comment_containers = await all_containers_in_sandbox.all()
-    comments = []
-    for container in comment_containers[1:]:
-        try:
-            all_texts = await container.locator('span[dir="auto"]').all_inner_texts()
-            TIMESTAMP_REGEX = re.compile(r'^\d+\s*(?:秒|分鐘|小時|天|週|[smhdw])$', re.IGNORECASE)
-            cleaned_fragments = [frag.strip().removesuffix("翻譯").strip() for frag in all_texts if frag.strip() and not frag.strip().isdigit() and not TIMESTAMP_REGEX.match(frag.strip())]
-            if len(cleaned_fragments) > 1:
-                comments.append({"author": cleaned_fragments[0], "text": "\n".join(cleaned_fragments[1:])})
-        except Exception: continue
-    return comments
 
-async def get_full_threads_content_resilient(url: str):
+# --- 主爬蟲協調函式 (簡化版) ---
+async def get_threads_content_stable(url: str):
+    """主爬蟲協調函式，只呼叫主文抓取，穩定可靠"""
     max_retries = 3
     for attempt in range(max_retries):
-        print(f"\n--- 爬蟲任務開始，第 {attempt + 1} / {max_retries} 次嘗試 ---")
+        print(f"\n--- 主文抓取任務開始，第 {attempt + 1} / {max_retries} 次嘗試 ---")
         try:
             async with async_playwright() as p:
-                # 終極修正：使用更節能的 Firefox 引擎
+                # 使用最穩定的 Firefox 引擎
                 browser = await p.firefox.launch(headless=True)
                 page = await browser.new_page()
                 try:
@@ -62,13 +49,16 @@ async def get_full_threads_content_resilient(url: str):
                     if "Threads" not in await page.title():
                         await browser.close()
                         continue
+                    
                     main_content_area = page.locator('div[role="main"]').first
                     await main_content_area.wait_for(state='attached', timeout=20000)
+                    
+                    # 只抓取主文
                     main_post = await get_threads_main_post(main_content_area)
-                    comments = await get_threads_comments(page, main_content_area)
+                    
                     await browser.close()
                     print(f"✅ 第 {attempt + 1} 次嘗試成功！")
-                    return {"main_post": main_post, "comments": comments}
+                    return main_post
                 finally:
                     if 'browser' in locals() and not browser.is_closed():
                         await browser.close()
@@ -79,6 +69,7 @@ async def get_full_threads_content_resilient(url: str):
             else:
                 raise e
 
+# --- Quart Web 應用 & LINE Bot 邏輯 (簡化版) ---
 app = Quart(__name__)
 CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = os.environ.get("CHANNEL_SECRET")
@@ -102,23 +93,24 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請貼上一個有效的 Threads 網址。"))
 
 async def process_threads_url(event, url):
-    line_bot_api.reply_message(event.reply_token, TextSendMessage(text="收到，正在為您建立知識筆記..."))
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text="收到，正在為您擷取主文內容..."))
     try:
-        result = await get_full_threads_content_resilient(url)
-        if result:
-            reply_text = f"[主文]\n{result['main_post']}"
-            if result["comments"]:
-                reply_text += "\n\n---\n[留言]"
-                for i, comment in enumerate(result["comments"]):
-                    reply_text += f"\n{i + 1}. [{comment['author']}]: {comment['text']}"
-            if len(reply_text) > 4900: 
-                reply_text = reply_text[:4900] + "\n\n...(內容過長，已被截斷)"
+        # 呼叫簡化版的穩定函式
+        main_post_content = await get_threads_content_stable(url)
+        
+        if main_post_content:
+            # 直接回傳主文，不再有留言
+            reply_text = main_post_content
+            
+            if len(reply_text) > 4950: 
+                reply_text = reply_text[:4950] + "\n\n...(內容過長，已被截斷)"
+            
             line_bot_api.push_message(event.source.user_id, TextSendMessage(text=reply_text))
         else:
-            line_bot_api.push_message(event.source.user_id, TextSendMessage(text="抓取失敗，所有重試均無效。"))
+            line_bot_api.push_message(event.source.user_id, TextSendMessage(text="抓取失敗，或該貼文沒有文字內容。"))
     except Exception as e:
          print(f"爬蟲任務最終失敗: {e}")
          line_bot_api.push_message(event.source.user_id, TextSendMessage(text=f"處理過程中發生嚴重錯誤，請聯繫管理員。"))
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=7860) # 直接使用 Hugging Face 的端口
