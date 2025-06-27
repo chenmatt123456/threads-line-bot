@@ -1,4 +1,4 @@
-# app.py (知識庫版 - 最終純淨版)
+# app.py (最終加固版 - Final Fortified)
 
 import os
 import asyncio
@@ -9,15 +9,17 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from playwright.async_api import async_playwright, TimeoutError
 
-# --- 爬蟲核心邏輯 ---
+# --- 爬蟲核心函式 ---
 async def get_threads_main_post(main_content_area):
     print("\n--- 正在沙盒內抓取主文 ---")
     post_container_selector = 'div[data-pressable-container="true"]'
+    # 加固1：延長主文容器的等待時間
     main_post_container = main_content_area.locator(post_container_selector).first
-    await main_post_container.wait_for(state='visible', timeout=10000)
+    await main_post_container.wait_for(state='visible', timeout=15000) 
+    print("✅ 成功鎖定主文容器！")
     try:
         more_button = main_post_container.get_by_role("button", name="more", exact=False)
-        await more_button.click(timeout=2000)
+        await more_button.click(timeout=3000)
         await asyncio.sleep(1)
     except TimeoutError:
         pass
@@ -29,7 +31,6 @@ async def get_threads_main_post(main_content_area):
 async def get_threads_comments(page, main_content_area):
     print("\n--- 正在抓取留言 ---")
     scroll_count = 2
-    print(f"將模擬向下捲動 {scroll_count} 次以載入少量關鍵留言...")
     for i in range(scroll_count):
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await asyncio.sleep(2)
@@ -62,8 +63,11 @@ async def get_full_threads_content_resilient(url: str):
                     if "Threads" not in await page.title():
                         await browser.close()
                         continue
+                    
+                    # 加固2：為沙盒定位提供最長的耐心
                     main_content_area = page.locator('div[role="main"]').first
-                    await main_content_area.wait_for(state='attached', timeout=15000)
+                    await main_content_area.wait_for(state='attached', timeout=20000)
+                    
                     main_post = await get_threads_main_post(main_content_area)
                     comments = await get_threads_comments(page, main_content_area)
                     await browser.close()
