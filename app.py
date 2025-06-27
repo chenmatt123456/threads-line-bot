@@ -1,23 +1,4 @@
-[主文]
-這是主貼文的完整內容，可能會有很多行，
-包含所有的細節。
-
----
-[留言]
-1. [作者A]: 這是第一則留言，可能是對主文的補充。
-2. [作者B]: 這是第二則留言。
-3. [作者C]: 這是第三則留言。
-...
-```這種格式清晰、簡潔，極其適合做為知識庫的原始資料。
-
----
-
-### 【知識庫版】為 NotebookLM 量身打造的終極代碼
-
-我已經為您完成了這兩處關鍵的修改。請用下方這份**完整**的程式碼，**完全覆蓋**您本地的 `app.py` 檔案。
-
-```python
-# app.py (知識庫版 - for NotebookLM)
+# app.py (知識庫版 - 最終純淨版)
 
 import os
 import asyncio
@@ -30,7 +11,6 @@ from playwright.async_api import async_playwright, TimeoutError
 
 # --- 爬蟲核心邏輯 ---
 async def get_threads_main_post(main_content_area):
-    # (此函式內容與上一版完全一樣，保持不變)
     print("\n--- 正在沙盒內抓取主文 ---")
     post_container_selector = 'div[data-pressable-container="true"]'
     main_post_container = main_content_area.locator(post_container_selector).first
@@ -48,16 +28,11 @@ async def get_threads_main_post(main_content_area):
 
 async def get_threads_comments(page, main_content_area):
     print("\n--- 正在抓取留言 ---")
-    
-    # --- 關鍵修改 1: 優化抓取效率 ---
-    # 將捲動次數減少到 2 次，以加快流程並獲取約 5-10 則關鍵留言
     scroll_count = 2
     print(f"將模擬向下捲動 {scroll_count} 次以載入少量關鍵留言...")
     for i in range(scroll_count):
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await asyncio.sleep(2)
-
-    # 後續的抓取邏輯保持不變
     post_container_selector = 'div[data-pressable-container="true"]'
     all_containers_in_sandbox = main_content_area.locator(post_container_selector)
     container_count = await all_containers_in_sandbox.count()
@@ -74,7 +49,6 @@ async def get_threads_comments(page, main_content_area):
         except Exception: continue
     return comments
 
-# 主爬蟲協調函式 (保持不變)
 async def get_full_threads_content_resilient(url: str):
     max_retries = 3
     for attempt in range(max_retries):
@@ -128,26 +102,18 @@ def handle_message(event):
     else:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text="請貼上一個有效的 Threads 網址。"))
 
-# 執行爬蟲並回傳結果的非同步函式
 async def process_threads_url(event, url):
-    # 保持友好的「處理中」回覆
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text="收到，正在為您建立知識筆記..."))
     try:
         result = await get_full_threads_content_resilient(url)
         if result:
-            # --- 關鍵修改 2: 重構文字呈現格式 ---
-            # 使用乾淨、結構化的格式
             reply_text = f"[主文]\n{result['main_post']}"
-            
             if result["comments"]:
                 reply_text += "\n\n---\n[留言]"
                 for i, comment in enumerate(result["comments"]):
-                    # 使用 "[作者]: 內容" 的格式
                     reply_text += f"\n{i + 1}. [{comment['author']}]: {comment['text']}"
-
             if len(reply_text) > 4900: 
                 reply_text = reply_text[:4900] + "\n\n...(內容過長，已被截斷)"
-
             line_bot_api.push_message(event.source.user_id, TextSendMessage(text=reply_text))
         else:
             line_bot_api.push_message(event.source.user_id, TextSendMessage(text="抓取失敗，所有重試均無效。"))
