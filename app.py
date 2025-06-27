@@ -1,4 +1,4 @@
-# app.py (最終加固版 - Final Fortified)
+# app.py (Firefox 引擎版 - 完整程式碼)
 
 import os
 import asyncio
@@ -9,13 +9,11 @@ from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from playwright.async_api import async_playwright, TimeoutError
 
-# --- 爬蟲核心函式 ---
 async def get_threads_main_post(main_content_area):
     print("\n--- 正在沙盒內抓取主文 ---")
     post_container_selector = 'div[data-pressable-container="true"]'
-    # 加固1：延長主文容器的等待時間
     main_post_container = main_content_area.locator(post_container_selector).first
-    await main_post_container.wait_for(state='visible', timeout=15000) 
+    await main_post_container.wait_for(state='visible', timeout=15000)
     print("✅ 成功鎖定主文容器！")
     try:
         more_button = main_post_container.get_by_role("button", name="more", exact=False)
@@ -56,18 +54,16 @@ async def get_full_threads_content_resilient(url: str):
         print(f"\n--- 爬蟲任務開始，第 {attempt + 1} / {max_retries} 次嘗試 ---")
         try:
             async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
+                # 終極修正：使用更節能的 Firefox 引擎
+                browser = await p.firefox.launch(headless=True)
                 page = await browser.new_page()
                 try:
                     await page.goto(url, wait_until='networkidle', timeout=60000)
                     if "Threads" not in await page.title():
                         await browser.close()
                         continue
-                    
-                    # 加固2：為沙盒定位提供最長的耐心
                     main_content_area = page.locator('div[role="main"]').first
                     await main_content_area.wait_for(state='attached', timeout=20000)
-                    
                     main_post = await get_threads_main_post(main_content_area)
                     comments = await get_threads_comments(page, main_content_area)
                     await browser.close()
@@ -83,7 +79,6 @@ async def get_full_threads_content_resilient(url: str):
             else:
                 raise e
 
-# --- Quart Web 應用 & LINE Bot 邏輯 ---
 app = Quart(__name__)
 CHANNEL_ACCESS_TOKEN = os.environ.get("CHANNEL_ACCESS_TOKEN")
 CHANNEL_SECRET = os.environ.get("CHANNEL_SECRET")
